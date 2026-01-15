@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: ai-chatbot-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ai_chatbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_chatbot123}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_chatbot_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/ai_enterprise_schema.sql:/docker-entrypoint-initdb.d/02-enterprise-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_chatbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.5
+    container_name: ai-chatbot-meilisearch
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_KEY:-masterKey123}
+      MEILI_ENV: development
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-chatbot-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Uncomment to use GPU (requires nvidia-docker)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-chatbot-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ai_chatbot}:${POSTGRES_PASSWORD:-ai_chatbot123}@postgres:5432/${POSTGRES_DB:-ai_chatbot_db}
+      OLLAMA_URL: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-llama3.1:8b}
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_KEY: ${MEILISEARCH_KEY:-masterKey123}
+      BACKEND_CORE_URL: ${BACKEND_CORE_URL:-http://localhost:3001}
+      PORT: ${PORT:-5000}
+      MAX_CHUNK_TOKENS: ${MAX_CHUNK_TOKENS:-800}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-50}
+    ports:
+      - "${PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  meilisearch_data:
+  ollama_data:
